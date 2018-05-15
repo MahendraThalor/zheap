@@ -218,12 +218,14 @@ UndoRecordPrepareTransInfo(UndoRecPtr urecptr, bool log_switched)
 	int			bufidx;
 	int			index = 0;
 
-	log = UndoLogGet(logno);
+	log = UndoLogGet(logno, false);
 
 	if (log_switched)
 	{
 		Assert(log->meta.prevlogno != InvalidUndoLogNumber);
-		log = UndoLogGet(log->meta.prevlogno);
+		log = UndoLogGet(log->meta.prevlogno, true);
+		if (log == NULL)
+			return;
 	}
 
 	/*
@@ -317,7 +319,7 @@ PrepareUpdateUndoActionProgress(UndoRecPtr urecptr, int progress)
 	int			bufidx;
 	int			index = 0;
 
-	log = UndoLogGet(logno);
+	log = UndoLogGet(logno, false);
 
 	if (log->meta.persistence == UNDO_TEMP)
 		return;
@@ -365,7 +367,7 @@ UndoRecordUpdateTransInfo(void)
 	UndoRecPtr	urec_ptr = InvalidUndoRecPtr;
 	UndoLogControl *log;
 
-	log = UndoLogGet(logno);
+	log = UndoLogGet(logno, false);
 	urec_ptr = xact_urec_info.urecptr;
 
 	/*
@@ -580,7 +582,7 @@ resize:
 	else
 		urecptr = UndoLogAllocate(size, upersistence);
 
-	log = UndoLogGet(UndoRecPtrGetLogNo(urecptr));
+	log = UndoLogGet(UndoRecPtrGetLogNo(urecptr), false);
 	Assert(AmAttachedToUndoLog(log) || InRecovery);
 
 	/*
@@ -871,7 +873,7 @@ InsertPreparedUndo(void)
 		 * We can read meta.prevlen without locking, because only we can write
 		 * to it.
 		 */
-		log = UndoLogGet(UndoRecPtrGetLogNo(urp));
+		log = UndoLogGet(UndoRecPtrGetLogNo(urp), false);
 		Assert(AmAttachedToUndoLog(log) || InRecovery);
 		prev_undolen = log->meta.prevlen;
 
@@ -883,7 +885,7 @@ InsertPreparedUndo(void)
 		{
 			if (log->meta.prevlogno != InvalidUndoLogNumber)
 			{
-				UndoLogControl *prevlog = UndoLogGet(log->meta.prevlogno);
+				UndoLogControl *prevlog = UndoLogGet(log->meta.prevlogno, false);
 				uur->uur_prevlen = prevlog->meta.prevlen;
 			}
 			else
@@ -1153,7 +1155,7 @@ UndoFetchRecord(UndoRecPtr urp, BlockNumber blkno, OffsetNumber offset,
 		prevrnode = rnode;
 
 		logno = UndoRecPtrGetLogNo(urp);
-		log = UndoLogGet(logno);
+		log = UndoLogGet(logno, true);
 		if (log == NULL)
 		{
 			if (BufferIsValid(urec->uur_buffer))
@@ -1217,7 +1219,7 @@ UndoFetchRecord(UndoRecPtr urp, BlockNumber blkno, OffsetNumber offset,
 /*
  * Return the previous undo record pointer.
  *
- * This API can switch to the previous log if the current log is exhausted,
+ * This API can switch to the previous log if the current log is full,
  * so the caller shouldn't use it where that is not expected.
  */
 UndoRecPtr
@@ -1234,12 +1236,12 @@ UndoGetPrevUndoRecptr(UndoRecPtr urp, uint16 prevlen)
 	{
 		UndoLogControl	*prevlog, *log;
 
-		log = UndoLogGet(logno);
+		log = UndoLogGet(logno, false);
 
 		Assert(log->meta.prevlogno != InvalidUndoLogNumber);
 
 		/* Fetch the previous log control. */
-		prevlog = UndoLogGet(log->meta.prevlogno);
+		prevlog = UndoLogGet(log->meta.prevlogno, false);	/* TODO */
 		logno = log->meta.prevlogno;
 		offset = prevlog->meta.insert;
 	}
