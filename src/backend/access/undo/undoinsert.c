@@ -52,6 +52,9 @@
 #include "access/xact.h"
 #include "access/undorecord.h"
 #include "access/undoinsert.h"
+#include "access/xact.h"
+#include "access/xlog.h"
+#include "access/xlogutils.h"
 #include "catalog/pg_tablespace.h"
 #include "storage/block.h"
 #include "storage/buf.h"
@@ -93,6 +96,7 @@ typedef struct UndoBuffers
 	UndoLogNumber	logno;			/* Undo log number */
 	BlockNumber		blk;			/* block number */
 	Buffer			buf;			/* buffer allocated for the block */
+	bool			zero;			/* new block full of zeroes */
 } UndoBuffers;
 
 static UndoBuffers def_buffers[MAX_UNDO_BUFFERS];
@@ -148,7 +152,8 @@ static void UndoRecordPrepareTransInfo(UndoRecPtr urecptr,
 											 bool log_switched);
 static int UndoGetBufferSlot(RelFileNode rnode, BlockNumber blk,
 							 ReadBufferMode rbm,
-							 UndoPersistence persistence);
+							 UndoPersistence persistence,
+							 XLogReaderState *xlog_record);
 static bool UndoRecordIsValid(UndoLogControl *log,
 							  UndoRecPtr urp);
 
@@ -275,7 +280,8 @@ UndoRecordPrepareTransInfo(UndoRecPtr urecptr, bool log_switched)
 	{
 		bufidx = UndoGetBufferSlot(rnode, cur_blk,
 								   RBM_NORMAL,
-								   log->meta.persistence);
+								   log->meta.persistence,
+								   NULL);
 		xact_urec_info.idx_undo_buffers[index++] = bufidx;
 		buffer = undo_buffer[bufidx].buf;
 		page = BufferGetPage(buffer);
@@ -324,7 +330,8 @@ PrepareUpdateUndoActionProgress(UndoRecPtr urecptr, int progress)
 	{
 		bufidx = UndoGetBufferSlot(rnode, cur_blk,
 								   RBM_NORMAL,
-								   log->meta.persistence);
+								   log->meta.persistence,
+								   NULL);
 		xact_urec_info.idx_undo_buffers[index++] = bufidx;
 		buffer = undo_buffer[bufidx].buf;
 		page = BufferGetPage(buffer);
@@ -419,7 +426,8 @@ static int
 UndoGetBufferSlot(RelFileNode rnode,
 				  BlockNumber blk,
 				  ReadBufferMode rbm,
-				  UndoPersistence persistence)
+				  UndoPersistence persistence,
+				  XLogReaderState *xlog_record)
 {
 	int 	i;
 	Buffer 	buffer;
@@ -454,12 +462,21 @@ UndoGetBufferSlot(RelFileNode rnode,
 		/*
 		 * Fetch the buffer in which we want to insert the undo record.
 		 */
-		buffer = ReadBufferWithoutRelcache(rnode,
-										   UndoLogForkNum,
-										   blk,
-										   rbm,
-										   NULL,
-										   RelPersistenceForUndoPersistence(persistence));
+		if (InRecovery)
+			XLogReadBufferForRedoBlock(xlog_record,
+									   rnode,
+									   UndoLogForkNum,
+									   blk,
+									   rbm,
+									   false,
+									   &buffer);
+		else
+			buffer = ReadBufferWithoutRelcache(rnode,
+											   UndoLogForkNum,
+											   blk,
+											   rbm,
+											   NULL,
+											   RelPersistenceForUndoPersistence(persistence));
 
 		/* Lock the buffer */
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
@@ -467,6 +484,7 @@ UndoGetBufferSlot(RelFileNode rnode,
 		undo_buffer[buffer_idx].buf = buffer;
 		undo_buffer[buffer_idx].blk = blk;
 		undo_buffer[buffer_idx].logno = rnode.relNode;
+		undo_buffer[buffer_idx].zero = rbm == RBM_ZERO;
 		buffer_idx++;
 	}
 
@@ -688,7 +706,7 @@ UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
  */
 UndoRecPtr
 PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
-				  TransactionId xid)
+				  TransactionId xid, XLogReaderState *xlog_record)
 {
 	UndoRecordSize	size;
 	UndoRecPtr		urecptr;
@@ -757,7 +775,8 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 
 	do
 	{
-		bufidx = UndoGetBufferSlot(rnode, cur_blk, rbm, upersistence);
+		bufidx = UndoGetBufferSlot(rnode, cur_blk, rbm, upersistence,
+								   xlog_record);
 		if (cur_size == 0)
 			cur_size = BLCKSZ - starting_byte;
 		else
@@ -788,6 +807,28 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	prepare_idx++;
 
 	return urecptr;
+}
+
+void
+RegisterUndoLogBuffers(uint8 first_block_id)
+{
+	int		idx;
+	int		flags;
+
+	for (idx = 0; idx < buffer_idx; idx++)
+	{
+		flags = undo_buffer[idx].zero ? REGBUF_WILL_INIT : 0;
+		XLogRegisterBuffer(first_block_id + idx, undo_buffer[idx].buf, flags);
+	}
+}
+
+void
+UndoLogBuffersSetLSN(XLogRecPtr recptr)
+{
+	int		idx;
+
+	for (idx = 0; idx < buffer_idx; idx++)
+		PageSetLSN(BufferGetPage(undo_buffer[idx].buf), recptr);
 }
 
 /*

@@ -40,7 +40,8 @@ typedef bool (*SatisfyUndoRecordCallback) (UnpackedUndoRecord* urec,
  * If in recovery, 'xid' refers to the transaction id stored in WAL.
  */
 extern UndoRecPtr PrepareUndoInsert(UnpackedUndoRecord *, UndoPersistence,
-									TransactionId);
+									TransactionId,
+									XLogReaderState *xlog_record);
 
 /*
  * Insert a previously-prepared undo record.  This will write the actual undo
@@ -49,6 +50,9 @@ extern UndoRecPtr PrepareUndoInsert(UnpackedUndoRecord *, UndoPersistence,
  * after entering a critical section; it should never fail.
  */
 extern void InsertPreparedUndo(void);
+
+extern void RegisterUndoLogBuffers(uint8 first_block_id);
+extern void UndoLogBuffersSetLSN(XLogRecPtr recptr);
 
 /*
  * Unlock and release undo buffers.  This step performed after exiting any

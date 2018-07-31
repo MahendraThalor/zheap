@@ -916,7 +916,8 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId);
+									InvalidTransactionId,
+									NULL);
 	}
 
 	/*
@@ -1080,6 +1081,7 @@ prepare_xlog:
 							zheaptup->t_len - SizeofZHeapTupleHeader);
 		if (xlrec.flags & XLZ_INSERT_CONTAINS_TPD_SLOT)
 			(void) RegisterTPDBuffer(page, 1);
+		RegisterUndoLogBuffers(2);
 
 		/* filtering by origin on a row level is much more efficient */
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
@@ -1095,6 +1097,7 @@ prepare_xlog:
 		PageSetLSN(page, recptr);
 		if (xlrec.flags & XLZ_INSERT_CONTAINS_TPD_SLOT)
 			TPDPageSetLSN(page, recptr);
+		UndoLogBuffersSetLSN(recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -1903,7 +1906,8 @@ zheap_tuple_updated:
 
 	urecptr = PrepareUndoInsert(&undorecord,
 								UndoPersistenceForRelation(relation),
-								InvalidTransactionId);
+								InvalidTransactionId,
+								NULL);
 	/* We must have a valid vmbuffer. */
 	Assert(BufferIsValid(vmbuffer));
 	vm_status = visibilitymap_get_status(relation,
@@ -2028,6 +2032,7 @@ prepare_xlog:
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
 		if (trans_slot_id > ZHEAP_PAGE_TRANS_SLOTS)
 			(void) RegisterTPDBuffer(page, 1);
+		RegisterUndoLogBuffers(2);
 
 		/* filtering by origin on a row level is much more efficient */
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
@@ -2042,6 +2047,7 @@ prepare_xlog:
 		PageSetLSN(page, recptr);
 		if (trans_slot_id > ZHEAP_PAGE_TRANS_SLOTS)
 			TPDPageSetLSN(page, recptr);
+		UndoLogBuffersSetLSN(recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -3023,7 +3029,8 @@ zheap_tuple_updated:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId);
+									InvalidTransactionId,
+									NULL);
 
 		temp_infomask = oldtup.t_data->t_infomask;
 
@@ -3118,6 +3125,7 @@ prepare_xlog:
 				(void) RegisterTPDBuffer(page, 1);
 			XLogRegisterData((char *) &xlundohdr, SizeOfUndoHeader);
 			XLogRegisterData((char *) &xlrec, SizeOfZHeapLock);
+			RegisterUndoLogBuffers(2);
 
 			/*
 			 * We always include old tuple header for undo in WAL record
@@ -3146,6 +3154,7 @@ prepare_xlog:
 			PageSetLSN(page, recptr);
 			if (trans_slot_id > ZHEAP_PAGE_TRANS_SLOTS)
 				TPDPageSetLSN(page, recptr);
+			UndoLogBuffersSetLSN(recptr);
 		}
 		END_CRIT_SECTION();
 
@@ -3418,7 +3427,8 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId);
+									InvalidTransactionId,
+									NULL);
 	}
 	else
 	{
@@ -3485,7 +3495,8 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId);
+									InvalidTransactionId,
+									NULL);
 
 		initStringInfo(&undorecord.uur_payload);
 
@@ -3499,7 +3510,8 @@ reacquire_buffer:
 
 		new_urecptr = PrepareUndoInsert(&new_undorecord,
 										UndoPersistenceForRelation(relation),
-										InvalidTransactionId);
+										InvalidTransactionId,
+										NULL);
 
 		/* Check and lock the TPD page before starting critical section. */
 		CheckAndLockTPDPage(relation, new_trans_slot_id, trans_slot_id,
@@ -3569,6 +3581,13 @@ reacquire_buffer:
 	if (newbuf != buffer && BufferIsValid(vmbuffer_new))
 		vm_status_new = visibilitymap_get_status(relation,
 								BufferGetBlockNumber(newbuf), &vmbuffer_new);
+
+	/*
+	 * Make sure we have space to register regular pages, a couple of TPD
+	 * pages and undo log pages, before we enter the critical section.
+	 * TODO: what is the maximum number of pages we could touch?
+	 */
+	XLogEnsureRecordSpace(8, 0);
 
 	START_CRIT_SECTION();
 
@@ -4019,6 +4038,7 @@ prepare_xlog:
 			RegisterTPDBuffer(BufferGetPage(oldbuf), 2);
 		}
 	}
+	RegisterUndoLogBuffers(5);
 
 	/*
 	 * Prepare WAL data for the new tuple.
@@ -4097,6 +4117,7 @@ prepare_xlog:
 	PageSetLSN(BufferGetPage(oldbuf), recptr);
 	if (trans_slot_id > ZHEAP_PAGE_TRANS_SLOTS)
 		TPDPageSetLSN(BufferGetPage(oldbuf), recptr);
+	UndoLogBuffersSetLSN(recptr);
 }
 
 /*
@@ -5715,7 +5736,8 @@ zheap_lock_tuple_guts(Relation rel, Buffer buf, ZHeapTuple zhtup,
 
 	urecptr = PrepareUndoInsert(&undorecord,
 								UndoPersistenceForRelation(rel),
-								InvalidTransactionId);
+								InvalidTransactionId,
+								NULL);
 
 
 	START_CRIT_SECTION();
@@ -5783,6 +5805,7 @@ prepare_xlog:
 			(void) RegisterTPDBuffer(page, 1);
 		XLogRegisterData((char *) &xlundohdr, SizeOfUndoHeader);
 		XLogRegisterData((char *) &xlrec, SizeOfZHeapLock);
+		RegisterUndoLogBuffers(2);
 
 		/*
 		 * We always include old tuple header for undo in WAL record
@@ -5811,6 +5834,7 @@ prepare_xlog:
 		PageSetLSN(page, recptr);
 		if (trans_slot_id > ZHEAP_PAGE_TRANS_SLOTS)
 			TPDPageSetLSN(page, recptr);
+		UndoLogBuffersSetLSN(recptr);
 	}
 	END_CRIT_SECTION();
 
@@ -10945,7 +10969,8 @@ reacquire_buffer:
 				undorecord[i].uur_blkprev = urecptr;
 				urecptr = PrepareUndoInsert(&undorecord[i],
 											UndoPersistenceForRelation(relation),
-											InvalidTransactionId);
+											InvalidTransactionId,
+											NULL);
 
 				initStringInfo(&undorecord[i].uur_payload);
 			}
@@ -11232,6 +11257,8 @@ prepare_xlog:
 			if (xlrec->flags & XLZ_INSERT_CONTAINS_TPD_SLOT)
 				(void) RegisterTPDBuffer(page, 1);
 
+			RegisterUndoLogBuffers(2);
+
 			/* filtering by origin on a row level is much more efficient */
 			XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
@@ -11246,6 +11273,7 @@ prepare_xlog:
 			PageSetLSN(page, recptr);
 			if (xlrec->flags & XLZ_INSERT_CONTAINS_TPD_SLOT)
 				TPDPageSetLSN(page, recptr);
+			UndoLogBuffersSetLSN(recptr);
 		}
 
 		END_CRIT_SECTION();

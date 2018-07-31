@@ -287,7 +287,8 @@ reacquire_slot:
 
 	urecptr = PrepareUndoInsert(&undorecord,
 								UndoPersistenceForRelation(onerel),
-								InvalidTransactionId);
+								InvalidTransactionId,
+								NULL);
 
 	/*
 	 * We prepare the temporary copy of the page so that during page
