@@ -14,12 +14,15 @@
 #include "postgres.h"
 
 #include "access/tpd.h"
+#include "access/undoaction.h"
 #include "access/undoaction_xlog.h"
 #include "access/undolog.h"
 #include "access/undorecord.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
-#include "access/zheap.h"
+#include "access/xlog_internal.h"
+#include "access/zheap.h"			/* TODO: get rid of this */
+#include "access/zheapam_undo.h"	/* TODO: get rid of this */
 #include "nodes/pg_list.h"
 #include "pgstat.h"
 #include "postmaster/undoloop.h"
@@ -43,13 +46,6 @@ static void RollbackHTRemoveEntry(UndoRecPtr start_urec_ptr);
 
 /* This is the hash table to store all the rollabck requests. */
 static HTAB *RollbackHT;
-
-/* undo record information */
-typedef struct UndoRecInfo
-{
-	UndoRecPtr	urp;	/* undo recptr (undo record location). */
-	UnpackedUndoRecord	*uur;	/* actual undo record. */
-} UndoRecInfo;
 
 /*
  * execute_undo_actions - Execute the undo actions
@@ -89,6 +85,8 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 	UndoRecInfo	*urec_info;
 
 	Assert(from_urecptr != InvalidUndoRecPtr);
+	Assert(UndoRecPtrGetLogNo(from_urecptr) != UndoRecPtrGetLogNo(to_urecptr) ||
+		   from_urecptr >= to_urecptr);
 	/*
 	 * If the location upto which rollback need to be done is not provided,
 	 * then rollback the complete transaction.
@@ -142,6 +140,40 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		if (uur != NULL)
 			reloid = uur->uur_reloid;
 
+		xid = uur->uur_xid;
+
+		if ((uur->uur_info & UREC_INFO_BLOCK) == 0)
+		{
+			prev_reloid = InvalidOid;
+			urec_prevlen = uur->uur_prevlen;
+			save_urec_ptr = uur->uur_blkprev;
+
+			/*
+			 * Execute individual undo actions not associated with a page
+			 * immediately.
+			 */
+			urec_info = palloc(sizeof(UndoRecInfo));
+			urec_info->uur = uur;
+			urec_info->urp = urec_ptr;
+			luinfo = lappend(luinfo, urec_info);
+			execute_undo_actions_page(luinfo, urec_ptr, reloid, xid,
+									  InvalidBlockNumber, false, rellock,
+									  0);
+			pfree(urec_info);
+			urec_info = NULL;
+			list_free(luinfo);
+			luinfo = NIL;
+			UndoRecordRelease(uur);
+
+			/* Follow undo chain until to_urecptr. */
+			if (urec_prevlen > 0 && urec_ptr != to_urecptr)
+			{
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
+				continue;
+			}
+			else
+				more_undo = false;
+		}
 		/*
 		 * If the record is already discarded by undo worker or if the relation
 		 * is dropped or truncated, then we cannot fetch record successfully.
@@ -149,7 +181,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		 *
 		 * Note: reloid remains InvalidOid for a discarded record.
 		 */
-		if (!OidIsValid(reloid))
+		else if (!OidIsValid(reloid))
 		{
 			/* release the undo records for which action has been replayed */
 			while (luinfo)
@@ -169,18 +201,16 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			if (uur != NULL)
 				UndoRecordRelease(uur);
 
+			/* TODO why return? */
 			return;
 		}
-
-		xid = uur->uur_xid;
-
-		/* Collect the undo records that belong to the same page. */
-		if (!OidIsValid(prev_reloid) ||
-			(prev_reloid == reloid &&
-			 prev_fork == uur->uur_fork &&
-			 prev_block == uur->uur_block &&
-			 prev_blkprev == urec_ptr))
+		else if (!OidIsValid(prev_reloid) ||
+				 (prev_reloid == reloid &&
+				  prev_fork == uur->uur_fork &&
+				  prev_block == uur->uur_block &&
+				  prev_blkprev == urec_ptr))
 		{
+			/* Collect the undo records that belong to the same page. */
 			prev_reloid = reloid;
 			prev_fork = uur->uur_fork;
 			prev_block = uur->uur_block;
@@ -219,14 +249,15 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		 * If the previous undo pointer in the page is invalid, then also the
 		 * undo chain for the current block is completed.
 		 */
-		if ((!more_undo && nopartial) || !UndoRecPtrIsValid(save_urec_ptr))
+		if (luinfo &&
+			((!more_undo && nopartial) || !UndoRecPtrIsValid(save_urec_ptr)))
 		{
 			execute_undo_actions_page(luinfo, save_urec_ptr, prev_reloid,
 									  xid, prev_block, true, rellock, options);
 			/* Done with the page so reset the options. */
 			options = 0;
 		}
-		else
+		else if (luinfo)
 		{
 			execute_undo_actions_page(luinfo, save_urec_ptr, prev_reloid,
 									  xid, prev_block, false, rellock, options);
@@ -606,6 +637,30 @@ execute_undo_actions_page(List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
 						  TransactionId xid, BlockNumber blkno,
 						  bool blk_chain_complete, bool rellock, int options)
 {
+	UndoRecInfo *first;
+
+	/*
+	 * All records passed to us are for the same RMGR, so we just use the
+	 * first record to dispatch.
+	 */
+	Assert(luinfo != NIL);
+	first = (UndoRecInfo *) linitial(luinfo);
+
+	return RmgrTable[first->uur->uur_rmid].rm_undo(luinfo, urec_ptr, reloid,
+												   xid, blkno,
+												   blk_chain_complete, rellock,
+												   options);
+}
+
+/*
+ * Zheap undo handler.
+ * TODO: Move this into src/backend/access/zheap/zheapam_undo.c
+ */
+bool
+zheap_undo(List *luinfo, UndoRecPtr urec_ptr, Oid reloid, TransactionId xid,
+		   BlockNumber blkno, bool blk_chain_complete, bool rellock,
+		   int options)
+{
 	ListCell   *l_iter;
 	Relation	rel;
 	Buffer		buffer;
@@ -626,10 +681,7 @@ execute_undo_actions_page(List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
 	 * DDL and DML operations.
 	 */
 	if (!OidIsValid(reloid))
-	{
-		elog(LOG, "ignoring undo for invalid reloid");
 		return false;
-	}
 
 	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(reloid)))
 		return false;
@@ -1420,9 +1472,13 @@ PushRollbackReq(UndoRecPtr start_urec_ptr, UndoRecPtr end_urec_ptr, Oid dbid)
 	bool found = false;
 	RollbackHashEntry *rh;
 
+	Assert(UndoRecPtrGetLogNo(start_urec_ptr) != UndoRecPtrGetLogNo(end_urec_ptr) ||
+		   start_urec_ptr >= end_urec_ptr);
+
 	/* Do not push any rollback request if working in single user-mode */
 	if (!IsUnderPostmaster)
 		return false;
+
 	/*
 	 * If the location upto which rollback need to be done is not provided,
 	 * then rollback the complete transaction.

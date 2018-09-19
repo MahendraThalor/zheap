@@ -145,10 +145,7 @@ typedef struct XactUndoRecordInfo
 static XactUndoRecordInfo xact_urec_info;
 
 /* Prototypes for static functions. */
-static UnpackedUndoRecord* UndoGetOneRecord(UnpackedUndoRecord *urec,
-											UndoRecPtr urp, RelFileNode rnode,
-											UndoPersistence persistence);
-static void UndoRecordPrepareTransInfo(UndoRecPtr urecptr,
+static void PrepareUndoRecordUpdateTransInfo(UndoRecPtr urecptr,
 											 bool log_switched);
 static int UndoGetBufferSlot(RelFileNode rnode, BlockNumber blk,
 							 ReadBufferMode rbm,
@@ -1009,7 +1006,7 @@ UnlockReleaseUndoBuffers(void)
  * same block.  Caller will be responsible to release the buffer inside urec
  * and set it to invalid if he wishes to fetch the record from another block.
  */
-static UnpackedUndoRecord*
+UnpackedUndoRecord *
 UndoGetOneRecord(UnpackedUndoRecord *urec, UndoRecPtr urp, RelFileNode rnode,
 				 UndoPersistence persistence)
 {

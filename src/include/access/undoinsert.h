@@ -108,4 +108,9 @@ extern void UndoRecordUpdateTransInfo(void);
 
 /* Reset globals related to undo buffers */
 extern void ResetUndoBuffers(void);
+
+extern UnpackedUndoRecord *UndoGetOneRecord(UnpackedUndoRecord *urec,
+											UndoRecPtr urp, RelFileNode rnode,
+											UndoPersistence upersistence);
+
 #endif   /* UNDOINSERT_H */

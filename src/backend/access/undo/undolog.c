@@ -1597,7 +1597,7 @@ get_undo_log(UndoLogNumber logno, bool locked)
 			 * that have never existed.
 			 */
 			if (logno >= shared->next_logno)
-				elog(ERROR, "undo log %u hasn't been created yet", logno);
+				elog(PANIC, "undo log %u hasn't been created yet", logno);
 			entry = undologtable_insert(undologtable_cache, logno, &found);
 			entry->number = logno;
 			entry->control = NULL;

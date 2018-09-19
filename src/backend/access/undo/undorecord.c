@@ -81,6 +81,7 @@ InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
 
 	Assert (uur->uur_info != 0);
 
+
 	/*
 	 * If this is the first call, copy the UnpackedUndoRecord into the
 	 * temporary variables of the types that will actually be stored in the
@@ -89,6 +90,7 @@ InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
 	 */
 	if (*already_written == 0)
 	{
+		work_hdr.urec_rmid = uur->uur_rmid;
 		work_hdr.urec_type = uur->uur_type;
 		work_hdr.urec_info = uur->uur_info;
 		work_hdr.urec_prevlen = uur->uur_prevlen;
@@ -113,6 +115,7 @@ InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
 		 * We should have been passed the same record descriptor as before,
 		 * or caller has messed up.
 		 */
+		Assert(work_hdr.urec_rmid == uur->uur_rmid);
 		Assert(work_hdr.urec_type == uur->uur_type);
 		Assert(work_hdr.urec_info == uur->uur_info);
 		Assert(work_hdr.urec_prevlen == uur->uur_prevlen);
@@ -273,7 +276,7 @@ bool UnpackUndoRecord(UnpackedUndoRecord *uur, Page page, int starting_byte,
 					   &readptr, endptr,
 					   &my_bytes_decoded, already_decoded, false))
 		return false;
-
+	uur->uur_rmid = work_hdr.urec_rmid;
 	uur->uur_type = work_hdr.urec_type;
 	uur->uur_info = work_hdr.urec_info;
 	uur->uur_prevlen = work_hdr.urec_prevlen;
@@ -281,6 +284,8 @@ bool UnpackUndoRecord(UnpackedUndoRecord *uur, Page page, int starting_byte,
 	uur->uur_prevxid = work_hdr.urec_prevxid;
 	uur->uur_xid = work_hdr.urec_xid;
 	uur->uur_cid = work_hdr.urec_cid;
+	uur->uur_dbid = work_txn.urec_dbid;
+elog(LOG, "UnpackUndoRecord uur_rmid = %d, uur_type = %d, uur_prevlen = %d", (int) uur->uur_rmid, (int) uur->uur_type, (int) uur->uur_prevlen);
 
 	if ((uur->uur_info & UREC_INFO_RELATION_DETAILS) != 0)
 	{
