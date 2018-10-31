@@ -1159,6 +1159,34 @@ UndoLogGetNextInsertPtr(UndoLogNumber logno, TransactionId xid)
 }
 
 /*
+ * Get the address of the most recently inserted record.
+ */
+UndoRecPtr
+UndoLogGetLastRecordPtr(UndoLogNumber logno, TransactionId xid)
+{
+	UndoLogControl *log = get_undo_log(logno, false);
+	TransactionId logxid;
+	UndoRecPtr insert;
+	uint16 prevlen;
+
+	LWLockAcquire(&log->mutex, LW_SHARED);
+	insert = log->meta.insert;
+	logxid = log->xid;
+	prevlen = log->meta.prevlen;
+	LWLockRelease(&log->mutex);
+
+	if (TransactionIdIsValid(logxid) &&
+		TransactionIdIsValid(xid) &&
+		!TransactionIdEquals(logxid, xid))
+		return InvalidUndoRecPtr;
+
+	if (prevlen == 0)
+		return InvalidUndoRecPtr;
+
+	return MakeUndoRecPtr(logno, insert - prevlen);
+}
+
+/*
  * Rewind the undo log insert position also set the prevlen in the mata
  */
 void

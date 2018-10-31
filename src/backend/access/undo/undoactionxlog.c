@@ -14,8 +14,10 @@
  */
 #include "postgres.h"
 
+#include "access/transam.h"
 #include "access/tpd.h"
 #include "access/undoaction_xlog.h"
+#include "access/undoinsert.h"
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"

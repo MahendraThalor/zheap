@@ -377,6 +377,8 @@ extern void UndoLogSetLastXactStartPoint(UndoRecPtr point);
 extern UndoRecPtr UndoLogGetLastXactStartPoint(UndoLogNumber logno);
 extern UndoRecPtr UndoLogGetNextInsertPtr(UndoLogNumber logno,
 										  TransactionId xid);
+extern UndoRecPtr UndoLogGetLastRecordPtr(UndoLogNumber,
+										  TransactionId xid);
 extern void UndoLogRewind(UndoRecPtr insert_urp, uint16 prevlen);
 extern bool IsTransactionFirstRec(TransactionId xid);
 extern void UndoLogSetPrevLen(UndoLogNumber logno, uint16 prevlen);

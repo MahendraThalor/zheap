@@ -285,7 +285,6 @@ bool UnpackUndoRecord(UnpackedUndoRecord *uur, Page page, int starting_byte,
 	uur->uur_xid = work_hdr.urec_xid;
 	uur->uur_cid = work_hdr.urec_cid;
 	uur->uur_dbid = work_txn.urec_dbid;
-elog(LOG, "UnpackUndoRecord uur_rmid = %d, uur_type = %d, uur_prevlen = %d", (int) uur->uur_rmid, (int) uur->uur_type, (int) uur->uur_prevlen);
 
 	if ((uur->uur_info & UREC_INFO_RELATION_DETAILS) != 0)
 	{

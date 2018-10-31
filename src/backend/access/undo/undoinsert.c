@@ -49,19 +49,19 @@
 #include "postgres.h"
 
 #include "access/subtrans.h"
-#include "access/xact.h"
+#include "access/transam.h"
 #include "access/undorecord.h"
 #include "access/undoinsert.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
 #include "catalog/pg_tablespace.h"
+#include "commands/tablecmds.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "miscadmin.h"
-#include "commands/tablecmds.h"
 
 /*
  * XXX Do we want to support undo tuple size which is more than the BLCKSZ

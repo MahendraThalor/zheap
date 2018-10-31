@@ -14,12 +14,14 @@
 #include "postgres.h"
 
 #include "access/tpd.h"
+#include "access/transam.h"
 #include "access/undoaction.h"
 #include "access/undoaction_xlog.h"
 #include "access/undolog.h"
 #include "access/undorecord.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
+#include "access/xloginsert.h"
 #include "access/xlog_internal.h"
 #include "access/zheap.h"			/* TODO: get rid of this */
 #include "access/zheapam_undo.h"	/* TODO: get rid of this */
@@ -29,6 +31,7 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufmgr.h"
+#include "utils/rel.h"
 #include "utils/relfilenodemap.h"
 #include "utils/syscache.h"
 #include "miscadmin.h"
@@ -128,6 +131,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 	{
 		Oid			reloid = InvalidOid;
 		uint16		urec_prevlen;
+		bool		non_page;
 
 		more_undo = true;
 
@@ -137,12 +141,15 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		uur = UndoFetchRecord(urec_ptr, InvalidBlockNumber,
 						 InvalidOffsetNumber, InvalidTransactionId, NULL, NULL);
 
-		if (uur != NULL)
+		/* If there is no info block, this is not a page-based undo record. */
+		non_page = uur && !(uur->uur_info & UREC_INFO_BLOCK);
+
+		if (uur != NULL && !non_page)
 			reloid = uur->uur_reloid;
 
 		xid = uur->uur_xid;
 
-		if ((uur->uur_info & UREC_INFO_BLOCK) == 0)
+		if (non_page)
 		{
 			prev_reloid = InvalidOid;
 			urec_prevlen = uur->uur_prevlen;
@@ -177,7 +184,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		/*
 		 * If the record is already discarded by undo worker or if the relation
 		 * is dropped or truncated, then we cannot fetch record successfully.
-		 * Hence, exit quietly.
+		 * Hence, skip quietly.
 		 *
 		 * Note: reloid remains InvalidOid for a discarded record.
 		 */
@@ -193,16 +200,20 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 				luinfo = list_delete_first(luinfo);
 			}
 
-			/* Release the undo action lock before returning. */
-			if (nopartial)
-				TransactionUndoActionLockRelease(xid);
+			urec_prevlen = uur->uur_prevlen;
 
 			/* Release the just-fetched record */
 			if (uur != NULL)
 				UndoRecordRelease(uur);
 
-			/* TODO why return? */
-			return;
+			/* The undo chain must continue till we reach to_urecptr */
+			if (urec_prevlen > 0 && urec_ptr != to_urecptr)
+			{
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
+				continue;
+			}
+			else
+				more_undo = false;
 		}
 		else if (!OidIsValid(prev_reloid) ||
 				 (prev_reloid == reloid &&
