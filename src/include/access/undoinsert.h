@@ -40,7 +40,7 @@ typedef bool (*SatisfyUndoRecordCallback) (UnpackedUndoRecord* urec,
  * If in recovery, 'xid' refers to the transaction id stored in WAL.
  */
 extern UndoRecPtr PrepareUndoInsert(UnpackedUndoRecord *, UndoPersistence,
-									TransactionId, xl_undolog_meta *);
+									TransactionId);
 
 /*
  * Insert a previously-prepared undo record.  This will write the actual undo
@@ -90,8 +90,7 @@ extern void UndoRecordSetPrevUndoLen(uint16 len);
  * then it will allocate extra memory to hold the extra prepared undo.
  */
 extern void UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
-							   TransactionId xid, UndoPersistence upersistence,
-							   xl_undolog_meta *undometa);
+							   TransactionId xid, UndoPersistence upersistence);
 
 /*
  * return the previous undo record pointer.

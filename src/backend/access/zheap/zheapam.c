@@ -113,8 +113,7 @@ static void log_zheap_update(Relation reln, UnpackedUndoRecord undorecord,
 					ZHeapTuple oldtup, ZHeapTuple newtup,
 					int old_tup_trans_slot_id, int trans_slot_id,
 					int new_trans_slot_id, bool inplace_update,
-					bool all_visible_cleared, bool new_all_visible_cleared,
-					xl_undolog_meta *undometa);
+					bool all_visible_cleared, bool new_all_visible_cleared);
 static HTSU_Result
 zheap_lock_updated_tuple(Relation rel, ZHeapTuple tuple, ItemPointer ctid,
 						 TransactionId xid, LockTupleMode mode, LockOper lockopr,
@@ -770,7 +769,6 @@ zheap_insert(Relation relation, ZHeapTuple tup, CommandId cid,
 	Page		page;
 	UndoRecPtr	urecptr = InvalidUndoRecPtr,
 				prev_urecptr = InvalidUndoRecPtr;
-	xl_undolog_meta	undometa;
 	uint8		vm_status = 0;
 	bool		lock_reacquired;
 	bool		skip_undo;
@@ -918,8 +916,7 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId,
-									&undometa);
+									InvalidTransactionId);
 	}
 
 	/*
@@ -1049,13 +1046,6 @@ reacquire_buffer:
 		}
 
 prepare_xlog:
-		if (!skip_undo)
-		{
-			/*
-			 * LOG undolog meta if this is the first WAL after the checkpoint.
-			 */
-			LogUndoMetaData(&undometa);
-		}
 
 		GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
@@ -1268,7 +1258,6 @@ zheap_delete(Relation relation, ItemPointer tid,
 	bool		lock_reacquired;
 	bool		hasSubXactLock = false;
 	bool		hasPayload = false;
-	xl_undolog_meta undometa;
 	uint8		vm_status;
 
 	Assert(ItemPointerIsValid(tid));
@@ -1914,8 +1903,7 @@ zheap_tuple_updated:
 
 	urecptr = PrepareUndoInsert(&undorecord,
 								UndoPersistenceForRelation(relation),
-								InvalidTransactionId,
-								&undometa);
+								InvalidTransactionId);
 	/* We must have a valid vmbuffer. */
 	Assert(BufferIsValid(vmbuffer));
 	vm_status = visibilitymap_get_status(relation,
@@ -2006,8 +1994,6 @@ zheap_tuple_updated:
 		 * the WAL record again.
 		 */
 prepare_xlog:
-		/* LOG undolog meta if this is the first WAL after the checkpoint. */
-		LogUndoMetaData(&undometa);
 
 		GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 		if (!doPageWrites || XLogCheckBufferNeedsBackup(buffer))
@@ -2172,7 +2158,6 @@ zheap_update(Relation relation, ItemPointer otid, ZHeapTuple newtup,
 	bool		lock_reacquired;
 	bool		need_toast;
 	bool		hasSubXactLock = false;
-	xl_undolog_meta	undometa;
 	uint8		vm_status;
 	uint8		vm_status_new = 0;
 
@@ -3038,8 +3023,7 @@ zheap_tuple_updated:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId,
-									&undometa);
+									InvalidTransactionId);
 
 		temp_infomask = oldtup.t_data->t_infomask;
 
@@ -3126,9 +3110,6 @@ zheap_tuple_updated:
 				xlrec.flags |= XLZ_LOCK_FOR_UPDATE;
 
 prepare_xlog:
-			/* LOG undolog meta if this is the first WAL after the checkpoint. */
-			LogUndoMetaData(&undometa);
-
 			GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
 			XLogBeginInsert();
@@ -3437,8 +3418,7 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId,
-									&undometa);
+									InvalidTransactionId);
 	}
 	else
 	{
@@ -3497,7 +3477,7 @@ reacquire_buffer:
 		undorec[0] = undorecord;
 		undorec[1] = new_undorecord;
 		UndoSetPrepareSize(2, undorec, InvalidTransactionId,
-						   UndoPersistenceForRelation(relation), &undometa);
+						   UndoPersistenceForRelation(relation));
 
 		/* copy updated record (uur_info might got updated )*/
 		undorecord = undorec[0];
@@ -3505,8 +3485,7 @@ reacquire_buffer:
 
 		urecptr = PrepareUndoInsert(&undorecord,
 									UndoPersistenceForRelation(relation),
-									InvalidTransactionId,
-									NULL);
+									InvalidTransactionId);
 
 		initStringInfo(&undorecord.uur_payload);
 
@@ -3520,8 +3499,7 @@ reacquire_buffer:
 
 		new_urecptr = PrepareUndoInsert(&new_undorecord,
 										UndoPersistenceForRelation(relation),
-										InvalidTransactionId,
-										NULL);
+										InvalidTransactionId);
 
 		/* Check and lock the TPD page before starting critical section. */
 		CheckAndLockTPDPage(relation, new_trans_slot_id, trans_slot_id,
@@ -3762,7 +3740,7 @@ reacquire_buffer:
 						 &oldtup, zheaptup, tup_trans_slot_id,
 						 trans_slot_id, new_trans_slot_id,
 						 use_inplace_update, all_visible_cleared,
-						 new_all_visible_cleared, &undometa);
+						 new_all_visible_cleared);
 	}
 
 	END_CRIT_SECTION();
@@ -3842,8 +3820,7 @@ log_zheap_update(Relation reln, UnpackedUndoRecord undorecord,
 				 ZHeapTuple oldtup, ZHeapTuple newtup,
 				 int old_tup_trans_slot_id, int trans_slot_id,
 				 int new_trans_slot_id, bool inplace_update,
-				 bool all_visible_cleared, bool new_all_visible_cleared,
-				 xl_undolog_meta *undometa)
+				 bool all_visible_cleared, bool new_all_visible_cleared)
 {
 	xl_undo_header	xlundohdr,
 					xlnewundohdr;
@@ -3982,9 +3959,6 @@ log_zheap_update(Relation reln, UnpackedUndoRecord undorecord,
 	 * in zheap_delete.
 	 */
 prepare_xlog:
-	/* LOG undolog meta if this is the first WAL after the checkpoint. */
-	LogUndoMetaData(undometa);
-
 	GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 	if (!doPageWrites || XLogCheckBufferNeedsBackup(oldbuf))
 	{
@@ -5635,7 +5609,6 @@ zheap_lock_tuple_guts(Relation rel, Buffer buf, ZHeapTuple zhtup,
 	uint16		  old_infomask, temp_infomask;
 	uint16		  new_infomask = 0;
 	Page		  page;
-	xl_undolog_meta undometa;
 	bool		hasSubXactLock = false;
 
 	page = BufferGetPage(buf);
@@ -5742,8 +5715,7 @@ zheap_lock_tuple_guts(Relation rel, Buffer buf, ZHeapTuple zhtup,
 
 	urecptr = PrepareUndoInsert(&undorecord,
 								UndoPersistenceForRelation(rel),
-								InvalidTransactionId,
-								&undometa);
+								InvalidTransactionId);
 
 
 	START_CRIT_SECTION();
@@ -5804,9 +5776,6 @@ zheap_lock_tuple_guts(Relation rel, Buffer buf, ZHeapTuple zhtup,
 			xlrec.flags |= XLZ_LOCK_FOR_UPDATE;
 
 prepare_xlog:
-		/* LOG undolog meta if this is the first WAL after the checkpoint. */
-		LogUndoMetaData(&undometa);
-
 		GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
@@ -10815,7 +10784,6 @@ zheap_multi_insert(Relation relation, ZHeapTuple *tuples, int ntuples,
 	Size		saveFreeSpace;
 	TransactionId	xid = GetTopTransactionId();
 	uint32		epoch = GetEpochForXid(xid);
-	xl_undolog_meta	undometa;
 	bool		lock_reacquired;
 	bool		skip_undo;
 
@@ -10970,14 +10938,14 @@ reacquire_buffer:
 
 			UndoSetPrepareSize(zfree_offset_ranges->nranges, undorecord,
 							   InvalidTransactionId,
-							   UndoPersistenceForRelation(relation), &undometa);
+							   UndoPersistenceForRelation(relation));
 
 			for (i = 0; i < zfree_offset_ranges->nranges; i++)
 			{
 				undorecord[i].uur_blkprev = urecptr;
 				urecptr = PrepareUndoInsert(&undorecord[i],
 											UndoPersistenceForRelation(relation),
-											InvalidTransactionId, NULL);
+											InvalidTransactionId);
 
 				initStringInfo(&undorecord[i].uur_payload);
 			}
@@ -11243,8 +11211,6 @@ reacquire_buffer:
 				bufflags |= REGBUF_KEEP_DATA;
 
 prepare_xlog:
-			/* LOG undolog meta if this is the first WAL after the checkpoint. */
-			LogUndoMetaData(&undometa);
 			GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
 			XLogBeginInsert();

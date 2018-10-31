@@ -485,8 +485,7 @@ UndoGetBufferSlot(RelFileNode rnode,
  */
 static UndoRecPtr
 UndoRecordAllocateMulti(UnpackedUndoRecord *undorecords, int nrecords,
-						UndoPersistence upersistence, TransactionId txid,
-						xl_undolog_meta *undometa)
+						UndoPersistence upersistence, TransactionId txid)
 {
 	UnpackedUndoRecord *urec;
 	UndoLogControl *log;
@@ -611,14 +610,6 @@ resize:
 		update_prev_header = false;
 	}
 
-	/* Copy undometa before advancing the insert location. */
-	if (undometa)
-	{
-		undometa->meta = log->meta;
-		undometa->logno = log->logno;
-		undometa->xid = log->xid;
-	}
-
 	/*
 	 * If the insertion is for temp table then register an on commit
 	 * action for discarding the undo logs.
@@ -652,8 +643,7 @@ resize:
  */
 void
 UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
-				   TransactionId xid, UndoPersistence upersistence,
-				   xl_undolog_meta *undometa)
+				   TransactionId xid, UndoPersistence upersistence)
 {
 	TransactionId txid;
 
@@ -670,7 +660,7 @@ UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
 	}
 
 	multi_prep_urp = UndoRecordAllocateMulti(undorecords, max_prepare,
-											 upersistence, txid, undometa);
+											 upersistence, txid);
 	if (max_prepare <= MAX_PREPARED_UNDO)
 		return;
 
@@ -698,7 +688,7 @@ UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
  */
 UndoRecPtr
 PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
-				  TransactionId xid, xl_undolog_meta *undometa)
+				  TransactionId xid)
 {
 	UndoRecordSize	size;
 	UndoRecPtr		urecptr;
@@ -740,7 +730,7 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	}
 
 	if (!UndoRecPtrIsValid(multi_prep_urp))
-		urecptr = UndoRecordAllocateMulti(urec, 1, upersistence, txid, undometa);
+		urecptr = UndoRecordAllocateMulti(urec, 1, upersistence, txid);
 	else
 		urecptr = multi_prep_urp;
 
