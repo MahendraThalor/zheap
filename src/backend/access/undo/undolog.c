@@ -146,10 +146,10 @@ PG_FUNCTION_INFO_V1(pg_stat_get_undo_logs);
 
 /*
  * How many undo logs can be active at a time?  This creates a theoretical
- * maximum transaction size, but it we set it to a factor the maximum number
- * of backends it will be a very high limit.  Alternative designs involving
- * demand paging or dynamic shared memory could remove this limit but
- * introduce other problems.
+ * maximum transaction size, but if we set it to a multiple of the maximum
+ * number of backends it will be a very high limit.  Alternative designs
+ * involving demand paging or dynamic shared memory could remove this limit
+ * but introduce other problems.
  */
 static inline size_t
 UndoLogNumSlots(void)
@@ -158,8 +158,7 @@ UndoLogNumSlots(void)
 }
 
 /*
- * Return the amount of traditional smhem required for undo log management.
- * Extra shared memory will be managed using DSM segments.
+ * Return the amount of traditional shmem required for undo log management.
  */
 Size
 UndoLogShmemSize(void)
@@ -1595,7 +1594,7 @@ get_undo_log(UndoLogNumber logno, bool locked)
 
 				/*
 				 * TODO: Should this function be usable in a critical section?
-				 * Woudl it make sense to detect that we are in a critical
+				 * Would it make sense to detect that we are in a critical
 				 * section and just return the pointer to the log without
 				 * updating the cache, to avoid any chance of allocating
 				 * memory?
