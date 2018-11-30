@@ -132,6 +132,7 @@ static void
 make_undo_smgr_create(RelFileNode *rnode, TransactionId xid,
 					  XLogReaderState *xlog_record)
 {
+	XLogRecPtr lsn;
 	UnpackedUndoRecord undorecord = {0};
 
 	undorecord.uur_rmid = RM_SMGR_ID;
@@ -151,6 +152,8 @@ make_undo_smgr_create(RelFileNode *rnode, TransactionId xid,
 						   (const void *) rnode,
 						   sizeof(*rnode));
 
+	elog(LOG, "make_undo_smgr_create about to do undo stuff");
+	UndoLogBeginInsert();
 	PrepareUndoInsert(&undorecord, UNDO_PERMANENT, xid, xlog_record);
 
 	START_CRIT_SECTION();
@@ -162,7 +165,6 @@ make_undo_smgr_create(RelFileNode *rnode, TransactionId xid,
 	 */
 	if (!InRecovery)
 	{
-		XLogRecPtr lsn;
 		xl_smgr_precreate xlrec;
 
 		xlrec.rnode = *rnode;
@@ -173,6 +175,9 @@ make_undo_smgr_create(RelFileNode *rnode, TransactionId xid,
 		lsn = XLogInsert(RM_SMGR_ID, XLOG_SMGR_PRECREATE);
 		XLogFlush(lsn);
 	}
+	else
+		lsn = xlog_record->EndRecPtr;
+	UndoLogBuffersSetLSN(lsn);
 	END_CRIT_SECTION();
 
 	UnlockReleaseUndoBuffers();

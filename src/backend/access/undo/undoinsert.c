@@ -470,15 +470,15 @@ UndoGetBufferSlot(RelFileNode rnode,
 									   false,
 									   &buffer);
 		else
+		{
 			buffer = ReadBufferWithoutRelcache(rnode,
 											   UndoLogForkNum,
 											   blk,
 											   rbm,
 											   NULL,
 											   RelPersistenceForUndoPersistence(persistence));
-
-		/* Lock the buffer */
-		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+		}
 
 		undo_buffer[buffer_idx].buf = buffer;
 		undo_buffer[buffer_idx].blk = blk;
@@ -502,7 +502,8 @@ UndoGetBufferSlot(RelFileNode rnode,
  */
 static UndoRecPtr
 UndoRecordAllocateMulti(UnpackedUndoRecord *undorecords, int nrecords,
-						UndoPersistence upersistence, TransactionId txid)
+						UndoPersistence upersistence, TransactionId txid,
+						XLogReaderState *xlog_record)
 {
 	UnpackedUndoRecord *urec;
 	UndoLogControl *log;
@@ -575,7 +576,8 @@ resize:
 	}
 
 	if (InRecovery)
-		urecptr = UndoLogAllocateInRecovery(txid, size, upersistence);
+		urecptr = UndoLogAllocateInRecovery(txid, size, upersistence,
+											xlog_record);
 	else
 		urecptr = UndoLogAllocate(size, upersistence);
 
@@ -660,7 +662,8 @@ resize:
  */
 void
 UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
-				   TransactionId xid, UndoPersistence upersistence)
+				   TransactionId xid, UndoPersistence upersistence,
+				   XLogReaderState *xlog_record)
 {
 	TransactionId txid;
 
@@ -677,7 +680,8 @@ UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
 	}
 
 	multi_prep_urp = UndoRecordAllocateMulti(undorecords, max_prepare,
-											 upersistence, txid);
+											 upersistence, txid,
+											 xlog_record);
 	if (max_prepare <= MAX_PREPARED_UNDO)
 		return;
 
@@ -747,7 +751,8 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	}
 
 	if (!UndoRecPtrIsValid(multi_prep_urp))
-		urecptr = UndoRecordAllocateMulti(urec, 1, upersistence, txid);
+		urecptr = UndoRecordAllocateMulti(urec, 1, upersistence, txid,
+										  xlog_record);
 	else
 		urecptr = multi_prep_urp;
 
@@ -816,8 +821,11 @@ RegisterUndoLogBuffers(uint8 first_block_id)
 
 	for (idx = 0; idx < buffer_idx; idx++)
 	{
-		flags = undo_buffer[idx].zero ? REGBUF_WILL_INIT : 0;
+		flags = undo_buffer[idx].zero
+			? REGBUF_KEEP_DATA_AFTER_CP | REGBUF_WILL_INIT
+			: REGBUF_KEEP_DATA_AFTER_CP;
 		XLogRegisterBuffer(first_block_id + idx, undo_buffer[idx].buf, flags);
+		UndoLogRegister(first_block_id + idx, undo_buffer[idx].logno);
 	}
 }
 

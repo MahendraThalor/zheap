@@ -767,7 +767,7 @@ zheap_xlog_update(XLogReaderState *record)
 		undorec[0] = undorecord;
 		undorec[1] = newundorecord;
 
-		UndoSetPrepareSize(2, undorec, xid, UNDO_PERMANENT);
+		UndoSetPrepareSize(2, undorec, xid, UNDO_PERMANENT, record);
 		undorecord = undorec[0];
 		newundorecord = undorec[1];
 
@@ -1557,7 +1557,7 @@ zheap_xlog_multi_insert(XLogReaderState *record)
 		}
 
 		UndoSetPrepareSize(nranges, undorecord, xid,
-						   UNDO_PERMANENT);
+						   UNDO_PERMANENT, record);
 		for (i = 0; i < nranges; i++)
 		{
 			undorecord[i].uur_blkprev = urecptr;

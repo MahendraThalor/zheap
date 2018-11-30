@@ -94,7 +94,8 @@ extern void UndoRecordSetPrevUndoLen(uint16 len);
  * then it will allocate extra memory to hold the extra prepared undo.
  */
 extern void UndoSetPrepareSize(int max_prepare, UnpackedUndoRecord *undorecords,
-							   TransactionId xid, UndoPersistence upersistence);
+							   TransactionId xid, UndoPersistence upersistence,
+							   XLogReaderState *xlog_record);
 
 /*
  * return the previous undo record pointer.

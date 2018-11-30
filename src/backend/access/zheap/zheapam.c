@@ -3490,7 +3490,7 @@ reacquire_buffer:
 		undorec[0] = undorecord;
 		undorec[1] = new_undorecord;
 		UndoSetPrepareSize(2, undorec, InvalidTransactionId,
-						   UndoPersistenceForRelation(relation));
+						   UndoPersistenceForRelation(relation), NULL);
 
 		/* copy updated record (uur_info might got updated )*/
 		undorecord = undorec[0];
@@ -10967,7 +10967,7 @@ reacquire_buffer:
 
 			UndoSetPrepareSize(zfree_offset_ranges->nranges, undorecord,
 							   InvalidTransactionId,
-							   UndoPersistenceForRelation(relation));
+							   UndoPersistenceForRelation(relation), NULL);
 
 			for (i = 0; i < zfree_offset_ranges->nranges; i++)
 			{

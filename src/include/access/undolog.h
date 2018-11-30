@@ -343,11 +343,14 @@ UndoRecPtrGetTablespace(UndoRecPtr urp)
 #endif
 
 /* Space management. */
+extern void UndoLogBeginInsert(void);
+extern void UndoLogRegister(uint8 block_id, UndoLogNumber logno);
 extern UndoRecPtr UndoLogAllocate(size_t size,
 								  UndoPersistence level);
 extern UndoRecPtr UndoLogAllocateInRecovery(TransactionId xid,
 											size_t size,
-											UndoPersistence persistence);
+											UndoPersistence persistence,
+											XLogReaderState *xlog_record);
 extern void UndoLogAdvance(UndoRecPtr insertion_point,
 						   size_t size,
 						   UndoPersistence persistence);
