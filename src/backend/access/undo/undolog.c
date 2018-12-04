@@ -144,6 +144,14 @@ static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 static void undolog_xid_map_gc(void);
 
 /*
+ * The size of the group of unlogged members at the start of each
+ * UndoLogMetaData object.  This is the part of the object that is backed up
+ * by UndoLogRegister() after checkpoints, and restored by
+ * UndoLogAllocateInRecovery() when present.
+ */
+#define UndoLogMetaDataUnloggedPartSize (offsetof(UndoLogMetaData, logno))
+
+/*
  * The maximum number of undo logs that a single WAL record could touch.
  * Typically the number is 1, but it might touch a couple or more in rare
  * cases where space runs out.
@@ -883,7 +891,7 @@ UndoLogRegister(uint8 block_id, UndoLogNumber logno)
 		{
 			XLogRegisterBufData(block_id,
 								(char *) &meta_data_images[i],
-								sizeof(meta_data_images[i]));
+								UndoLogMetaDataUnloggedPartSize);
 			return;
 		}
 	}
@@ -930,31 +938,28 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 			block->rnode.relNode != allocate_in_recovery_logno)
 		{
 			UndoLogNumber logno = block->rnode.relNode;
-			UndoLogMetaData *meta_data_backup;
+			const void *backup;
 
 			/* We found a reference to a different (or first) undo log. */
 			log = get_undo_log(logno, false);
 
 			/*
 			 * Since on-line checkpoints capture an inconsistent snapshot of
-			 * undo log meta-data, we'll restore the meta-data image if one
-			 * was attached to the WAL record.
+			 * undo log meta-data, we'll restore the unlogged part of the
+			 * meta-data image if one was attached to the WAL record (that is,
+			 * the members that don't have WAL records for every change
+			 * already).
 			 */
-			meta_data_backup = (UndoLogMetaData *)
+			backup =
 				XLogRecGetBlockData(xlog_record, allocate_in_recovery_block_id,
 									&size);
-			if (unlikely(meta_data_backup))
+			if (unlikely(backup))
 			{
-				UndoLogOffset discard = log->meta.discard;
+				Assert(size == UndoLogMetaDataUnloggedPartSize);
 
-				/*
-				 * The discard pointer doesn't need this treatment, because
-				 * its changes are separately WAL-logged using absolute
-				 * values.
-				 */
+				/* Restore the unlogged members from the backup-imaged. */
 				LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
-				log->meta = *meta_data_backup;
-				log->meta.discard = discard;
+				memcpy(&log->meta, backup, UndoLogMetaDataUnloggedPartSize);
 				LWLockRelease(&log->mutex);
 			}
 

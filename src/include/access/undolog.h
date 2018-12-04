@@ -195,14 +195,27 @@ typedef int UndoLogNumber;
  */
 typedef struct UndoLogMetaData
 {
+	/*
+	 * Members whose changes are not explicitly logged in the WAL, to reduce
+	 * WAL volume.  Since the values recorded in an online checkpoint may be
+	 * out of the sync (ie not the correct values as at the redo LSN), these
+	 * are backed up in buffer data on first change after each checkpoint.
+	 * The layout must match UndoLogMetaDataImage.
+	 */
+	UndoLogOffset insert;			/* next insertion point (head) */
+	UndoLogOffset last_xact_start;	/* last transactions start undo offset */
+	uint16		prevlen;		   	/* length of the last record */
+	UndoLogNumber prevlogno;		/* Previous undo log number */
+
+	/* Members that are fixed for the lifetime of the undo log. */
 	UndoLogNumber logno;
-	UndoLogStatus status;
 	Oid		tablespace;
 	UndoPersistence persistence;	/* permanent, unlogged, temp? */
-	UndoLogOffset insert;			/* next insertion point (head) */
+
+	/* Members that are changed by explicit WAL records. */
+	UndoLogStatus status;
 	UndoLogOffset end;				/* one past end of highest segment */
 	UndoLogOffset discard;			/* oldest data needed (tail) */
-	UndoLogOffset last_xact_start;	/* last transactions start undo offset */
 
 	/*
 	 * If the same transaction is split over two undo logs then it stored the
@@ -212,22 +225,7 @@ typedef struct UndoLogMetaData
 	 * Fixme: See if we can find other way to handle it instead of keeping
 	 * previous log number.
 	 */
-	UndoLogNumber prevlogno;		/* Previous undo log number */
 	bool	is_first_rec;
-
-	/*
-	 * last undo record's length. We need to save this in undo meta and WAL
-	 * log so that the value can be preserved across restart so that the first
-	 * undo record after the restart can get this value properly.  This will be
-	 * used going to the previous record of the transaction during rollback.
-	 * In case the transaction have done some operation before checkpoint and
-	 * remaining after checkpoint in such case if we can't get the previous
-	 * record prevlen which which before checkpoint we can not properly
-	 * rollback.  And, undo worker is also fetch this value when rolling back
-	 * the last transaction in the undo log for locating the last undo record
-	 * of the transaction.
-	 */
-	uint16	prevlen;
 } UndoLogMetaData;
 
 #ifndef FRONTEND
