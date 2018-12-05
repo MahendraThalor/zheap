@@ -190,22 +190,29 @@ typedef int UndoLogNumber;
 	} while (false);
 
 /*
+ * Properties of an undo log that don't have explicit WAL records logging
+ * their changes, to reduce WAL volume.  Instead, they change incrementally
+ * whenever data is inserted as a result of other WAL records.  Since the
+ * values recorded in an online checkpoint may be out of the sync (ie not the
+ * correct values as at the redo LSN), these are backed up in buffer data on
+ * first change after each checkpoint.
+ */
+typedef struct UndoLogUnloggedMetaData
+{
+	UndoLogOffset insert;			/* next insertion point (head) */
+	UndoLogOffset last_xact_start;	/* last transactions start undo offset */
+	uint16		prevlen;		   	/* length of the last record */
+	UndoLogNumber prevlogno;		/* Previous undo log number */
+} UndoLogUnloggedMetaData;
+
+/*
  * Control metadata for an active undo log.  Lives in shared memory inside an
  * UndoLogControl object, but also written to disk during checkpoints.
  */
 typedef struct UndoLogMetaData
 {
-	/*
-	 * Members whose changes are not explicitly logged in the WAL, to reduce
-	 * WAL volume.  Since the values recorded in an online checkpoint may be
-	 * out of the sync (ie not the correct values as at the redo LSN), these
-	 * are backed up in buffer data on first change after each checkpoint.
-	 * The layout must match UndoLogMetaDataImage.
-	 */
-	UndoLogOffset insert;			/* next insertion point (head) */
-	UndoLogOffset last_xact_start;	/* last transactions start undo offset */
-	uint16		prevlen;		   	/* length of the last record */
-	UndoLogNumber prevlogno;		/* Previous undo log number */
+	/* Members that are not managed by explicit WAL logs. */
+	UndoLogUnloggedMetaData unlogged;
 
 	/* Members that are fixed for the lifetime of the undo log. */
 	UndoLogNumber logno;
@@ -217,14 +224,6 @@ typedef struct UndoLogMetaData
 	UndoLogOffset end;				/* one past end of highest segment */
 	UndoLogOffset discard;			/* oldest data needed (tail) */
 
-	/*
-	 * If the same transaction is split over two undo logs then it stored the
-	 * previous log number, see file header comments of undorecord.c for its
-	 * usage.
-	 *
-	 * Fixme: See if we can find other way to handle it instead of keeping
-	 * previous log number.
-	 */
 	bool	is_first_rec;
 } UndoLogMetaData;
 

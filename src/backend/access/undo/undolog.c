@@ -144,20 +144,20 @@ static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 static void undolog_xid_map_gc(void);
 
 /*
- * The size of the group of unlogged members at the start of each
- * UndoLogMetaData object.  This is the part of the object that is backed up
- * by UndoLogRegister() after checkpoints, and restored by
- * UndoLogAllocateInRecovery() when present.
- */
-#define UndoLogMetaDataUnloggedPartSize (offsetof(UndoLogMetaData, logno))
-
-/*
  * The maximum number of undo logs that a single WAL record could touch.
  * Typically the number is 1, but it might touch a couple or more in rare
  * cases where space runs out.
  */
-#define MAX_META_DATA_IMAGES 16
-static UndoLogMetaData meta_data_images[MAX_META_DATA_IMAGES];
+#define MAX_META_DATA_IMAGES 8
+static struct
+{
+	UndoLogNumber logno;
+	UndoLogUnloggedMetaData data;
+} meta_data_images[MAX_META_DATA_IMAGES];
+/*
+static UndoLogNumber meta_data_images_lognos[MAX_META_DATA_IMAGES];
+static UndoLogUnloggedMetaData meta_data_images[MAX_META_DATA_IMAGES];
+*/
 static int num_meta_data_images;
 static UndoLogNumber allocate_in_recovery_logno;
 static uint8 allocate_in_recovery_block_id;
@@ -365,7 +365,7 @@ UndoLogSetLastXactStartPoint(UndoRecPtr point)
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
 	/* TODO: review */
-	log->meta.last_xact_start = UndoRecPtrGetOffset(point);
+	log->meta.unlogged.last_xact_start = UndoRecPtrGetOffset(point);
 	LWLockRelease(&log->mutex);
 }
 
@@ -383,7 +383,7 @@ UndoLogGetLastXactStartPoint(UndoLogNumber logno)
 
 	LWLockAcquire(&log->mutex, LW_SHARED);
 	/* TODO: review */
-	last_xact_start = log->meta.last_xact_start;
+	last_xact_start = log->meta.unlogged.last_xact_start;
 	LWLockRelease(&log->mutex);
 
 	if (last_xact_start == 0)
@@ -405,7 +405,7 @@ UndoLogSetPrevLen(UndoLogNumber logno, uint16 prevlen)
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
 	/* TODO review */
-	log->meta.prevlen = prevlen;
+	log->meta.unlogged.prevlen = prevlen;
 	LWLockRelease(&log->mutex);
 }
 
@@ -422,7 +422,7 @@ UndoLogGetPrevLen(UndoLogNumber logno)
 
 	LWLockAcquire(&log->mutex, LW_SHARED);
 	/* TODO review */
-	prevlen = log->meta.prevlen;
+	prevlen = log->meta.unlogged.prevlen;
 	LWLockRelease(&log->mutex);
 
 	return prevlen;
@@ -770,7 +770,7 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 		if (need_to_unlock)
 			LWLockRelease(TablespaceCreateLock);
 		log = MyUndoLogState.logs[persistence];
-		log->meta.prevlogno = prevlogno;
+		log->meta.unlogged.prevlogno = prevlogno;
 		MyUndoLogState.need_to_choose_tablespace = false;
 	}
 
@@ -825,8 +825,8 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 	 * have to move insert to create space for 'size' usable bytes, stepping
 	 * over any intervening headers.
 	 */
-	Assert(log->meta.insert % BLCKSZ >= UndoLogBlockHeaderSize);
-	new_insert = UndoLogOffsetPlusUsableBytes(log->meta.insert, size);
+	Assert(log->meta.unlogged.insert % BLCKSZ >= UndoLogBlockHeaderSize);
+	new_insert = UndoLogOffsetPlusUsableBytes(log->meta.unlogged.insert, size);
 	Assert(new_insert % BLCKSZ >= UndoLogBlockHeaderSize);
 
 	/*
@@ -864,20 +864,19 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 	}
 
 	/*
-	 * Create a back-up imaged of the undo log meta-data, if we haven't
-	 * already done so since UndoLogBeginInsert() (ie for the WAL record that
-	 * this undo allocation will be replayed by).
+	 * Create a back-up image of the unlogged part of the undo log's
+	 * meta-data, if we haven't already done so since UndoLogBeginInsert() (ie
+	 * for the WAL record that this undo allocation will be replayed by).
 	 */
 	if (num_meta_data_images == 0 ||
 		meta_data_images[num_meta_data_images - 1].logno != log->logno)
 	{
 		if (num_meta_data_images >= MAX_META_DATA_IMAGES)
 			elog(ERROR, "too many undo log meta data images");
-		meta_data_images[num_meta_data_images++] = log->meta;
+		meta_data_images[num_meta_data_images].logno = log->logno;
+		meta_data_images[num_meta_data_images++].data = log->meta.unlogged;
 	}
-
-	elog(LOG, "UndoLogAllocate %zu (2)", log->meta.insert);
-	return MakeUndoRecPtr(log->logno, log->meta.insert);
+	return MakeUndoRecPtr(log->logno, log->meta.unlogged.insert);
 }
 
 void
@@ -890,8 +889,8 @@ UndoLogRegister(uint8 block_id, UndoLogNumber logno)
 		if (meta_data_images[i].logno == logno)
 		{
 			XLogRegisterBufData(block_id,
-								(char *) &meta_data_images[i],
-								UndoLogMetaDataUnloggedPartSize);
+								(char *) &meta_data_images[i].data,
+								sizeof(meta_data_images[i].data));
 			return;
 		}
 	}
@@ -919,8 +918,8 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 	if (allocate_in_recovery_logno != InvalidUndoLogNumber)
 	{
 		log = get_undo_log(allocate_in_recovery_logno, false);
-		if (UndoLogOffsetPlusUsableBytes(log->meta.insert, size) <= log->meta.end)
-			return MakeUndoRecPtr(log->logno, log->meta.insert);
+		if (UndoLogOffsetPlusUsableBytes(log->meta.unlogged.insert, size) <= log->meta.end)
+			return MakeUndoRecPtr(log->logno, log->meta.unlogged.insert);
 	}
 
 	/*
@@ -955,11 +954,11 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 									&size);
 			if (unlikely(backup))
 			{
-				Assert(size == UndoLogMetaDataUnloggedPartSize);
+				Assert(size == sizeof(UndoLogUnloggedMetaData));
 
 				/* Restore the unlogged members from the backup-imaged. */
 				LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
-				memcpy(&log->meta, backup, UndoLogMetaDataUnloggedPartSize);
+				memcpy(&log->meta.unlogged, backup, sizeof(UndoLogUnloggedMetaData));
 				LWLockRelease(&log->mutex);
 			}
 
@@ -969,13 +968,13 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 			 * At this stage we should have an undo log that can handle this
 			 * allocation.  If we don't, something is screwed up.
 			 */
-			if (UndoLogOffsetPlusUsableBytes(log->meta.insert, size) > log->meta.end)
+			if (UndoLogOffsetPlusUsableBytes(log->meta.unlogged.insert, size) > log->meta.end)
 				elog(ERROR,
 					 "cannot allocate %zu bytes in undo log %d",
 					 size, log->logno);
 
 			allocate_in_recovery_logno = log->logno;
-			return MakeUndoRecPtr(log->logno, log->meta.insert);
+			return MakeUndoRecPtr(log->logno, log->meta.unlogged.insert);
 		}
 	}
 
@@ -1005,10 +1004,11 @@ UndoLogAdvance(UndoRecPtr insertion_point, size_t size, UndoPersistence persiste
 
 	Assert(log != NULL);
 	Assert(InRecovery || logno == log->logno);
-	Assert(UndoRecPtrGetOffset(insertion_point) == log->meta.insert);
+	Assert(UndoRecPtrGetOffset(insertion_point) == log->meta.unlogged.insert);
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
-	log->meta.insert = UndoLogOffsetPlusUsableBytes(log->meta.insert, size);
+	log->meta.unlogged.insert =
+		UndoLogOffsetPlusUsableBytes(log->meta.unlogged.insert, size);
 	LWLockRelease(&log->mutex);
 }
 
@@ -1055,7 +1055,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		elog(ERROR,
 			 "cannot advance discard pointer for undo log %d because it is entirely discarded",
 			 logno);
-	if (discard > log->meta.insert)
+	if (discard > log->meta.unlogged.insert)
 		elog(ERROR, "cannot move discard point past insert point");
 	old_discard = log->meta.discard;
 	if (discard < old_discard)
@@ -1063,14 +1063,14 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	end = log->meta.end;
 	/* Are we discarding the last remaining data in a log marked as full? */
 	if (log->meta.status == UNDO_LOG_STATUS_FULL &&
-		discard == log->meta.insert)
+		discard == log->meta.unlogged.insert)
 	{
 		/*
 		 * Adjust the discard and insert pointers so that the final segment is
 		 * deleted from disk, and remember not to recycle it.
 		 */
 		entirely_discarded = true;
-		log->meta.insert = log->meta.end;
+		log->meta.unlogged.insert = log->meta.end;
 		discard = log->meta.end;
 	}
 	LWLockRelease(&log->mutex);
@@ -1123,7 +1123,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		 * multiple segments at a time and pays just one fsync().
 		 */
 		LWLockAcquire(&log->mutex, LW_SHARED);
-		if ((log->meta.end - log->meta.insert) < UndoLogSegmentSize &&
+		if ((log->meta.end - log->meta.unlogged.insert) < UndoLogSegmentSize &&
 			log->meta.status == UNDO_LOG_STATUS_ACTIVE)
 			recycle = 1;
 		else
@@ -1222,7 +1222,7 @@ UndoLogGetFirstValidRecord(UndoLogControl *log, bool *full)
 	UndoRecPtr	result;
 
 	LWLockAcquire(&log->mutex, LW_SHARED);
-	if (log->meta.discard == log->meta.insert)
+	if (log->meta.discard == log->meta.unlogged.insert)
 		result = InvalidUndoRecPtr;
 	else
 		result = MakeUndoRecPtr(log->logno, log->meta.discard);
@@ -1245,7 +1245,7 @@ UndoLogGetNextInsertPtr(UndoLogNumber logno, TransactionId xid)
 	UndoRecPtr	insert;
 
 	LWLockAcquire(&log->mutex, LW_SHARED);
-	insert = log->meta.insert;
+	insert = log->meta.unlogged.insert;
 	logxid = log->xid;
 	LWLockRelease(&log->mutex);
 
@@ -1267,9 +1267,9 @@ UndoLogGetLastRecordPtr(UndoLogNumber logno, TransactionId xid)
 	uint16 prevlen;
 
 	LWLockAcquire(&log->mutex, LW_SHARED);
-	insert = log->meta.insert;
+	insert = log->meta.unlogged.insert;
 	logxid = log->xid;
-	prevlen = log->meta.prevlen;
+	prevlen = log->meta.unlogged.prevlen;
 	LWLockRelease(&log->mutex);
 
 	if (TransactionIdIsValid(logxid) &&
@@ -1294,8 +1294,8 @@ UndoLogRewind(UndoRecPtr insert_urp, uint16 prevlen)
 	UndoLogOffset	insert = UndoRecPtrGetOffset(insert_urp);
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
-	log->meta.insert = insert;
-	log->meta.prevlen = prevlen;
+	log->meta.unlogged.insert = insert;
+	log->meta.unlogged.prevlen = prevlen;
 
 	/*
 	 * Force the wal log on next undo allocation. So that during recovery undo
@@ -1841,7 +1841,7 @@ attach_undo_log(UndoPersistence persistence, Oid tablespace)
 		 * header.  XXX That means that insert is > end for a short time in a
 		 * newly created undo log.  Is there any problem with that?
 		 */
-		log->meta.insert = UndoLogBlockHeaderSize;
+		log->meta.unlogged.insert = UndoLogBlockHeaderSize;
 		log->meta.discard = UndoLogBlockHeaderSize;
 
 		log->meta.logno = logno;
@@ -2146,7 +2146,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 
 		/* Check if this undo log can be forcibly detached. */
 		LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
-		if (log->meta.discard == log->meta.insert &&
+		if (log->meta.discard == log->meta.unlogged.insert &&
 			(log->xid == InvalidTransactionId ||
 			 !TransactionIdIsInProgress(log->xid)))
 		{
@@ -2315,7 +2315,7 @@ ResetUndoLogs(UndoPersistence persistence)
 		 * TODO: Should we rewind to zero instead, so we can reuse that (now)
 		 * unreferenced address space?
 		 */
-		log->meta.insert = log->meta.discard = log->meta.end +
+		log->meta.unlogged.insert = log->meta.discard = log->meta.end +
 			UndoLogBlockHeaderSize;
 	}
 }
@@ -2397,7 +2397,7 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 				 MakeUndoRecPtr(log->logno, log->meta.discard));
 		values[3] = CStringGetTextDatum(buffer);
 		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
-				 MakeUndoRecPtr(log->logno, log->meta.insert));
+				 MakeUndoRecPtr(log->logno, log->meta.unlogged.insert));
 		values[4] = CStringGetTextDatum(buffer);
 		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
 				 MakeUndoRecPtr(log->logno, log->meta.end));
@@ -2410,10 +2410,10 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 			nulls[7] = true;
 		else
 			values[7] = Int32GetDatum((int64) log->pid);
-		if (log->meta.prevlogno == InvalidUndoLogNumber)
+		if (log->meta.unlogged.prevlogno == InvalidUndoLogNumber)
 			nulls[8] = true;
 		else
-			values[8] = ObjectIdGetDatum((Oid) log->meta.prevlogno);
+			values[8] = ObjectIdGetDatum((Oid) log->meta.unlogged.prevlogno);
 		switch (log->meta.status)
 		{
 		case UNDO_LOG_STATUS_ACTIVE:
@@ -2475,7 +2475,7 @@ undolog_xlog_create(XLogReaderState *record)
 	log->meta.status = UNDO_LOG_STATUS_ACTIVE;
 	log->meta.persistence = xlrec->persistence;
 	log->meta.tablespace = xlrec->tablespace;
-	log->meta.insert = UndoLogBlockHeaderSize;
+	log->meta.unlogged.insert = UndoLogBlockHeaderSize;
 	log->meta.discard = UndoLogBlockHeaderSize;
 	shared->next_logno = Max(xlrec->logno + 1, shared->next_logno);
 	LWLockRelease(&log->mutex);
@@ -2673,8 +2673,8 @@ undolog_xlog_rewind(XLogReaderState *record)
 	UndoLogControl *log;
 
 	log = get_undo_log(xlrec->logno, false);
-	log->meta.insert = xlrec->insert;
-	log->meta.prevlen = xlrec->prevlen;
+	log->meta.unlogged.insert = xlrec->insert;
+	log->meta.unlogged.prevlen = xlrec->prevlen;
 }
 
 void

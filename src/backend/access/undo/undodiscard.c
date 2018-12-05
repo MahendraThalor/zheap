@@ -120,7 +120,7 @@ UndoDiscardOneLog(UndoLogControl *log, TransactionId xmin, bool *hibernate)
 					 * prior to undo_recptr, the undo actions are already
 					 * applied.
 					 */
-					if (MakeUndoRecPtr(logno, log->meta.insert) > undo_recptr)
+					if (MakeUndoRecPtr(logno, log->meta.unlogged.insert) > undo_recptr)
 					{
 						UndoRecordRelease(uur);
 
@@ -359,7 +359,7 @@ UndoLogDiscardAll()
 		 * xid till whom the undo is discarded will not be required
 		 * for single user mode.
 		 */
-		UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.insert),
+		UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.unlogged.insert),
 					   InvalidTransactionId);
 	}
 
@@ -484,6 +484,6 @@ TempUndoDiscard(UndoLogNumber logno)
 	Assert (log->meta.persistence == UNDO_TEMP);
 
 	/* Process the undo log. */
-	UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.insert),
+	UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.unlogged.insert),
 				   InvalidTransactionId);
 }
