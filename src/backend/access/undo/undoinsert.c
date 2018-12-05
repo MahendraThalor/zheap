@@ -145,8 +145,6 @@ typedef struct XactUndoRecordInfo
 static XactUndoRecordInfo xact_urec_info;
 
 /* Prototypes for static functions. */
-static void PrepareUndoRecordUpdateTransInfo(UndoRecPtr urecptr,
-											 bool log_switched);
 static int UndoGetBufferSlot(RelFileNode rnode, BlockNumber blk,
 							 ReadBufferMode rbm,
 							 UndoPersistence persistence,
