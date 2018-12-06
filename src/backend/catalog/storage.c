@@ -152,7 +152,6 @@ make_undo_smgr_create(RelFileNode *rnode, TransactionId xid,
 						   (const void *) rnode,
 						   sizeof(*rnode));
 
-	elog(LOG, "make_undo_smgr_create about to do undo stuff");
 	UndoLogBeginInsert();
 	PrepareUndoInsert(&undorecord, UNDO_PERMANENT, xid, xlog_record);
 
@@ -575,6 +574,15 @@ smgr_redo(XLogReaderState *record)
 
 		make_undo_smgr_create(&xlrec->rnode, XLogRecGetXid(record), record);
 	}
+	else if (info == XLOG_SMGR_DROP)
+	{
+		xl_smgr_drop *xlrec = (xl_smgr_drop *) XLogRecGetData(record);
+		SMgrRelation reln;
+
+		reln = smgropen(xlrec->rnode, InvalidBackendId);
+		smgrdounlink(reln, true);
+		smgrclose(reln);
+	}
 	else if (info == XLOG_SMGR_TRUNCATE)
 	{
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) XLogRecGetData(record);
@@ -657,6 +665,13 @@ smgr_undo(List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
 			srel = smgropen(*rnode, InvalidBackendId);
 			smgrdounlink(srel, true);	/* tolerate ENOENT */
 			smgrclose(srel);
+
+			xl_smgr_drop xlrec;
+
+			xlrec.rnode = *rnode;
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+			XLogInsert(RM_SMGR_ID, XLOG_SMGR_DROP);
 		}
 		else
 			elog(PANIC,

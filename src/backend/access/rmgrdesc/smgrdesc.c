@@ -35,7 +35,15 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 	else if (info == XLOG_SMGR_PRECREATE)
 	{
 		xl_smgr_precreate *xlrec = (xl_smgr_precreate *) rec;
-		char	   *path = relpathperm(xlrec->rnode, 0); // TODO xlrec->forkNum);
+		char	   *path = relpathperm(xlrec->rnode, 0);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_DROP)
+	{
+		xl_smgr_precreate *xlrec = (xl_smgr_precreate *) rec;
+		char	   *path = relpathperm(xlrec->rnode, 0);
 
 		appendStringInfoString(buf, path);
 		pfree(path);
@@ -63,6 +71,9 @@ smgr_identify(uint8 info)
 			break;
 		case XLOG_SMGR_CREATE:
 			id = "CREATE";
+			break;
+		case XLOG_SMGR_DROP:
+			id = "DROP";
 			break;
 		case XLOG_SMGR_TRUNCATE:
 			id = "TRUNCATE";
